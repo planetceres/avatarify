@@ -3,6 +3,8 @@
 import threading
 import cv2
 import time
+import numpy as np
+import pyrealsense2 as rs
 
 
 WARMUP_TIMEOUT = 10.0
@@ -12,13 +14,20 @@ class VideoCaptureAsync:
     def __init__(self, src=0, width=640, height=480):
         self.src = src
 
-        self.cap = cv2.VideoCapture(self.src)
-        if not self.cap.isOpened():
-            raise RuntimeError("Cannot open camera. Try to choose other CAMID in './scripts/settings.sh'")
-        
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self.grabbed, self.frame = self.cap.read()
+        # Create a pipeline
+        self.pipeline = rs.pipeline()
+
+        config = rs.config()
+        config.enable_stream(rs.stream.color, width, height, rs.format.rgb8, 30)
+
+        # Start streaming
+        self.pipeline.start(config)
+
+        frame = self.pipeline.wait_for_frames()
+        color_frame = frame.get_color_frame()
+        self.grabbed = True
+
+        self.frame = np.asanyarray(color_frame.get_data())[:, :, ::-1]
         self.started = False
         self.read_lock = threading.Lock()
 
@@ -49,7 +58,14 @@ class VideoCaptureAsync:
 
     def update(self):
         while self.started:
-            grabbed, frame = self.cap.read()
+            grabbed = False
+            frames = self.pipeline.wait_for_frames()
+            color_frame = frames.get_color_frame()
+            if not color_frame:
+                continue
+
+            frame = np.asanyarray(color_frame.get_data())[:, :, ::-1]
+            grabbed = True
             with self.read_lock:
                 self.grabbed = grabbed
                 self.frame = frame
@@ -65,4 +81,4 @@ class VideoCaptureAsync:
         self.thread.join()
 
     def __exit__(self, exec_type, exc_value, traceback):
-        self.cap.release()
+        self.pipeline.stop()
